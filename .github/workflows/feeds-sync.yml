@@ -1,0 +1,55 @@
+name: feeds sync
+
+# Copies the source's definition files into one rolling release (tag `feeds`):
+# the directory index is read once and every file of the wanted name shape (a
+# year's file or an "all" file) is fetched with a conditional GET on the ETag
+# and Last-Modified of the copy held, so an unchanged origin costs one request
+# per file; a changed file is downloaded whole, decoded to its end as
+# compressed XML with its definitions counted, and uploaded byte for byte
+# beside state.json (per file: the origin's validators, size, sha256,
+# definition count, copy time, whether the index still lists it). A file that
+# fails, is truncated or comes back below 90% of the definitions held keeps
+# its copy and says why; a file the index no longer lists keeps its copy.
+# Every 2 hours.
+#
+# Set the repository secret SOURCE_BASE to the directory URL the files live
+# under (Settings → Secrets and variables → Actions → Secrets); it is masked in every log.
+on:
+  schedule:
+    - cron: "41 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "true fetches every file whole even when the origin says it has not changed"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: refuse without the source secret
+        env:
+          BASE: ${{ secrets.SOURCE_BASE }}
+        run: |
+          if [ -z "$BASE" ]; then echo "::error::repository secret SOURCE_BASE is not set"; exit 1; fi
+      - name: sync
+        env:
+          BASE: ${{ secrets.SOURCE_BASE }}
+          FORCE: ${{ inputs.force }}
+          RELEASE_TAG: feeds
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          chmod +x bin/feeds-sync
+          sha256sum bin/feeds-sync
+          bin/feeds-sync
